@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPX 軌跡轉圖片</title>
+<style>
+:root{--bg:#efe7d6;--card:#faf6ec;--tx:#3a3022;--mut:#7b6b55;--bd:#d6c8ab;--ac:#5a6e34}
+@media (prefers-color-scheme:dark){:root{--bg:#1d1913;--card:#2a241b;--tx:#eee4cf;--mut:#b5a688;--bd:#4b402e;--ac:#8fa65b}}
+input[type=range],input[type=checkbox]{accent-color:var(--ac)}
+h1,h2{color:var(--ac)}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 system-ui,-apple-system,"Noto Sans TC",sans-serif;background:var(--bg);color:var(--tx)}
+.wrap{display:grid;grid-template-columns:340px 1fr;gap:16px;padding:16px;max-width:1300px;margin:auto}
+@media(max-width:820px){.wrap{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
+h1{font-size:18px;margin:0 0 12px}h2{font-size:14px;margin:0 0 10px}
+label{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:6px 0;color:var(--mut)}
+input[type=range]{flex:1}
+input[type=text],textarea,select{width:100%;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx);font:inherit}
+input[type=color]{width:40px;height:28px;padding:0;border:1px solid var(--bd);border-radius:6px;background:none}
+button{padding:7px 12px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);cursor:pointer;font:inherit}
+button.p{background:var(--ac);border-color:var(--ac);color:#fff}
+.row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.item{display:flex;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--bd);font-size:12px}
+.item span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item select{width:78px}
+.stage{display:flex;justify-content:center;padding:8px}
+#vp{overflow:hidden;border-radius:8px;cursor:grab;touch-action:none;
+background-image:linear-gradient(45deg,#8883 25%,transparent 25%,transparent 75%,#8883 75%),linear-gradient(45deg,#8883 25%,transparent 25%,transparent 75%,#8883 75%);background-size:20px 20px;background-position:0 0,10px 10px}
+#vp:active{cursor:grabbing}
+canvas{display:block;transform-origin:0 0}
+.hint{color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div>
+ <div class="card">
+  <h1>⛰ GPX 軌跡轉圖片</h1>
+  <input type="file" id="file" accept=".gpx" multiple>
+  <div id="files" class="hint" style="margin-top:8px">尚未上傳檔案</div>
+  <label><span>多檔時依位置合併成一條</span><input type="checkbox" id="merge" checked></label>
+  <div class="hint">合併會從最近的端點依序接起，必要時自動反轉方向。</div>
+  <label><span>每個檔案使用不同顏色</span><input type="checkbox" id="multi"></label>
+  <div class="hint">勾選後可在上方檔案清單中個別改色；未勾選時全部使用「路線樣式」的顏色。</div>
+ </div>
+ <div class="card">
+  <h2>路線樣式</h2>
+  <label>顏色<input type="color" id="lc" value="#000000"></label>
+  <label>粗細<input type="range" id="lw" min="1" max="30" step="0.5" value="6"><b id="lwv">6</b></label>
+  <label>背景色<input type="color" id="bg" value="#ffffff"></label>
+  <label><span>透明背景</span><input type="checkbox" id="tr"></label>
+  <label><span>顯示指北針（圖片上方固定為北）</span><input type="checkbox" id="na" checked></label>
+  <label>旋轉（0° 為上北）<input type="range" id="rot" min="0" max="359" step="1" value="0"><input type="number" id="rotn" step="1" value="0" style="width:68px;padding:4px 6px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)"><b>°</b></label>
+  <label>輸出寬度
+   <select id="ow" style="width:110px"><option value="1200">1200 px</option><option value="1600" selected>1600 px</option><option value="2400">2400 px</option><option value="3200">3200 px</option></select></label>
+ </div>
+ <div class="card">
+  <h2>起點與距離</h2>
+  <select id="ss"></select>
+  <input type="text" id="sc" placeholder="起點座標：緯度, 經度" style="margin-top:6px;display:none">
+  <label><span>起點標記顯示在圖上</span><input type="checkbox" id="sm" checked></label>
+  <label><span>圖上標籤附上距離</span><input type="checkbox" id="dd" checked></label>
+  <div class="hint">距離為沿路線的實際行走距離（水平距離，不含高低起伏）；點位會對應到路線上最近的位置計算。</div>
+ </div>
+ <div class="card">
+  <h2>新增點位</h2>
+  <input type="text" id="pin" placeholder="緯度, 經度（例：25.0330, 121.5654）">
+  <input type="text" id="plb" placeholder="標籤（可選）" style="margin-top:6px">
+  <label>形狀
+   <select id="ps" style="width:110px"><option value="circle">實心圓形</option><option value="triangle">三角形</option><option value="square">正方形</option><option value="drop">水滴型</option></select></label>
+  <label>顏色<input type="color" id="pc" value="#ff0000"></label>
+  <label>大小<input type="range" id="pz" min="4" max="40" value="14"><b id="pzv">14</b></label>
+  <label><span>吸附到最近的路線（圖形中心落在路線上）</span><input type="checkbox" id="snap" checked></label>
+  <div class="row"><button class="p" id="add">加入點位</button><span class="hint" id="perr"></span></div>
+  <div id="plist" style="margin-top:8px"></div>
+ </div>
+</div>
+<div>
+ <div class="card">
+  <div class="row" style="margin:0 0 10px"><h2 style="margin:0;flex:1">預覽</h2><button id="rv">重設檢視</button><button class="p" id="dl">下載 PNG</button></div>
+  <div class="stage"><div id="vp"><canvas id="cv" width="800" height="500"></canvas></div></div>
+  <div class="hint" style="margin-top:6px">滑鼠滾輪縮放、拖曳平移、雙擊重設檢視</div>
+ </div>
+</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const tracks=[],points=[];
+const PAL=['#e11d48','#2563eb','#16a34a','#f59e0b','#7c3aed','#0891b2','#db2777','#65a30d'];
+const cv=$('cv'),ctx=cv.getContext('2d'),vp=$('vp');
+
+function parseGPX(txt,name){
+  const d=new DOMParser().parseFromString(txt,'application/xml');
+  let els=[...d.getElementsByTagName('trkpt')];
+  if(!els.length)els=[...d.getElementsByTagName('rtept')];
+  const pts=els.map(e=>[+e.getAttribute('lat'),+e.getAttribute('lon')]).filter(p=>isFinite(p[0])&&isFinite(p[1]));
+  return pts.length?{name,pts}:null;
+}
+$('file').addEventListener('change',async e=>{
+  for(const f of e.target.files){
+    const t=parseGPX(await f.text(),f.name);
+    if(t){t.color=PAL[tracks.length%PAL.length];tracks.push(t)}
+  }
+  e.target.value='';renderFiles();draw();
+});
+function renderStartOpts(){
+  const ss=$('ss');
+  if(startSel.startsWith('file-')&&+startSel.slice(5)>=tracks.length)startSel='auto';
+  ss.innerHTML='';ss.add(new Option('不顯示距離','none'));
+  tracks.forEach((t,i)=>ss.add(new Option('「'+t.name+'」的起點','file-'+i)));
+  ss.add(new Option('自訂座標','custom'));
+  ss.value=startSel==='auto'?(tracks.length?'file-0':'none'):startSel;
+  $('sc').style.display=ss.value==='custom'?'':'none';
+}
+function renderFiles(){renderStartOpts();
+  const box=$('files');
+  if(!tracks.length){box.textContent='尚未上傳檔案';return}
+  box.innerHTML='';
+  tracks.forEach((t,i)=>{
+    const r=document.createElement('div');r.className='item';
+    r.innerHTML='<span></span><small>'+t.pts.length+' 點</small>';
+    r.firstChild.textContent=t.name;
+    if($('multi').checked){const c=document.createElement('input');c.type='color';c.value=t.color;c.oninput=()=>{t.color=c.value;draw()};r.appendChild(c)}
+    const b=document.createElement('button');b.textContent='×';
+    b.onclick=()=>{tracks.splice(i,1);renderFiles();draw()};
+    r.appendChild(b);box.appendChild(r);
+  });
+}
+const d2=(a,b)=>(a[0]-b[0])**2+(a[1]-b[1])**2;
+function mergeTracks(){
+  const rest=tracks.map((t,i)=>({pts:t.pts.slice(),idx:i}));
+  const chain=[rest.shift()];
+  while(rest.length){
+    const cs=chain[0].pts[0],lp=chain[chain.length-1].pts,ce=lp[lp.length-1];
+    let best=null;
+    rest.forEach((q,i)=>{
+      const a=q.pts[0],b=q.pts[q.pts.length-1];
+      [[d2(ce,a),i,0],[d2(ce,b),i,1],[d2(cs,b),i,2],[d2(cs,a),i,3]].forEach(c=>{if(!best||c[0]<best[0])best=c});
+    });
+    const q=rest.splice(best[1],1)[0];
+    if(best[2]==1||best[2]==3){q.pts.reverse();q.rev=true}
+    if(best[2]<2)chain.push(q);else chain.unshift(q);
+  }
+  return chain;
+}
+function snapTo(lines,p,cl){
+  const px=p[1]*cl,py=p[0];let best=null,bd=Infinity;
+  lines.forEach((l,li)=>{for(let i=0;i<l.length;i++){
+    const a=l[i],b=l[i+1]||a,ax=a[1]*cl,ay=a[0],vx=b[1]*cl-ax,vy=b[0]-ay,L=vx*vx+vy*vy;
+    let t=L?((px-ax)*vx+(py-ay)*vy)/L:0;t=Math.max(0,Math.min(1,t));
+    const d=(px-ax-t*vx)**2+(py-ay-t*vy)**2;
+    if(d<bd){bd=d;best={pt:[a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1])],li,i,t}}
+  }});
+  return best;
+}
+function shape(c,type,x,y,r,col){
+  c.fillStyle=col;c.beginPath();
+  if(type=='circle')c.arc(x,y,r,0,7);
+  else if(type=='square')c.rect(x-r,y-r,2*r,2*r);
+  else if(type=='triangle'){c.moveTo(x,y-r*1.45);c.lineTo(x+r*1.2,y+r*.75);c.lineTo(x-r*1.2,y+r*.75);c.closePath()}
+  else{ // 水滴：尖端朝上，圓心對準座標
+    y+=r*.6;c.moveTo(x,y-r*2.2);
+    c.bezierCurveTo(x-r*.3,y-r*1.3,x-r,y-r*.7,x-r,y);
+    c.arc(x,y,r,Math.PI,0,true);
+    c.bezierCurveTo(x+r,y-r*.7,x+r*.3,y-r*1.3,x,y-r*2.2);
+    c.closePath();
+  }
+  c.fill();
+  c.lineWidth=Math.max(1,r*.15);c.strokeStyle='#fff';c.stroke();
+}
+let rotDeg=0,startSel='auto',customStart=null;
+const view={z:1,x:0,y:0};
+function applyView(){
+  const w=vp.clientWidth,h=vp.clientHeight;
+  view.x=Math.min(0,Math.max(w-w*view.z,view.x));view.y=Math.min(0,Math.max(h-h*view.z,view.y));
+  cv.style.transform=`translate(${view.x}px,${view.y}px) scale(${view.z})`;
+}
+function resetView(){view.z=1;view.x=view.y=0;applyView()}
+function fit(){
+  const st=document.querySelector('.stage'),aw=st.clientWidth-16,ah=Math.max(320,innerHeight*.72);
+  const sc=Math.min(aw/cv.width,ah/cv.height),w=Math.round(cv.width*sc),h=Math.round(cv.height*sc);
+  cv.style.width=w+'px';cv.style.height=h+'px';vp.style.width=w+'px';vp.style.height=h+'px';applyView();
+}
+addEventListener('resize',fit);
+function draw(){draw0();fit()}
+function draw0(){
+  const W=+$('ow').value,k=W/1600,th=rotDeg*Math.PI/180,sn=Math.sin(th),cs=Math.cos(th);
+  const lc=$('lc').value,multi=$('multi').checked;
+  let lines=[],groups=[],ch=null;
+  if(tracks.length){
+    if($('merge').checked){
+      ch=mergeTracks();
+      lines=[ch.flatMap(c=>c.pts)];
+      groups=multi?ch.map((c,i)=>({pts:i?[ch[i-1].pts[ch[i-1].pts.length-1]].concat(c.pts):c.pts,color:tracks[c.idx].color})):[{pts:lines[0],color:lc}];
+    }else{
+      lines=tracks.map(t=>t.pts);
+      groups=tracks.map(t=>({pts:t.pts,color:multi?t.color:lc}));
+    }
+  }
+  const allRaw=lines.flat().concat(points.map(p=>[p.lat,p.lon]));
+  if(!allRaw.length){cv.width=800;cv.height=500;ctx.clearRect(0,0,800,500);
+    ctx.fillStyle='#888';ctx.font='20px sans-serif';ctx.textAlign='center';
+    ctx.fillText('請上傳 GPX 檔案',400,250);return}
+  let la0=90,la1=-90;for(const p of allRaw){if(p[0]<la0)la0=p[0];if(p[0]>la1)la1=p[0]}
+  const cl=Math.cos((la0+la1)/2*Math.PI/180);
+  const hav=(a,b)=>{const R=6371008.8,t=Math.PI/180,h=Math.sin((b[0]-a[0])*t/2)**2+Math.cos(a[0]*t)*Math.cos(b[0]*t)*Math.sin((b[1]-a[1])*t/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+  const cum=lines.map(l=>{const c=[0];for(let i=1;i<l.length;i++)c.push(c[i-1]+hav(l[i-1],l[i]));return c});
+  const posOf=o=>{const c=cum[o.li],n=c[o.i+1];return c[o.i]+(n===undefined?0:o.t*(n-c[o.i]))};
+  const sel=startSel==='auto'?(tracks.length?'file-0':'none'):startSel;
+  let start=null;
+  if(lines.length&&sel==='custom'&&customStart){const o=snapTo(lines,customStart,cl);start={li:o.li,pos:posOf(o),pt:o.pt}}
+  else if(lines.length&&sel.startsWith('file-')){
+    const kf=+sel.slice(5);
+    if(ch){let off=0;for(const c of ch){if(c.idx===kf){const vi=c.rev?off+c.pts.length-1:off;start={li:0,pos:cum[0][vi],pt:lines[0][vi]};break}off+=c.pts.length}}
+    else if(kf<lines.length)start={li:kf,pos:0,pt:lines[kf][0]};
+  }
+  const snapOn=$('snap').checked&&lines.length>0;
+  const pp=points.map(p=>{
+    const raw=[p.lat,p.lon],o=lines.length?snapTo(lines,raw,cl):null;
+    let dist=null,nd=false;
+    if(start&&o){if(o.li===start.li)dist=(Math.abs(posOf(o)-start.pos)/1000).toFixed(2)+' km';else nd=true}
+    return{...p,q:snapOn&&o?o.pt:raw,dist,nd};
+  });
+  points.forEach((p,i)=>{p.dist=pp[i].dist;p.nd=pp[i].nd});
+  const proj=p=>{const x=p[1]*cl,y=-p[0];return[x*cs-y*sn,x*sn+y*cs]};
+  const PG=groups.map(g=>({c:g.color,p:g.pts.map(proj)})),PP=pp.map(p=>proj(p.q));
+  let x0=1e18,x1=-1e18,y0=1e18,y1=-1e18;
+  const bd=q=>{if(q[0]<x0)x0=q[0];if(q[0]>x1)x1=q[0];if(q[1]<y0)y0=q[1];if(q[1]>y1)y1=q[1]};
+  PG.forEach(g=>g.p.forEach(bd));PP.forEach(bd);
+  const dx=Math.max(x1-x0,1e-9),dy=Math.max(y1-y0,1e-9);
+  const pad=90*k;let w=W,s=(w-2*pad)/dx,h=dy*s+2*pad;
+  const maxH=W*1.6;
+  if(h>maxH){h=maxH;s=(h-2*pad)/dy;w=dx*s+2*pad}
+  cv.width=Math.round(w);cv.height=Math.round(h);
+  const ox=(cv.width-dx*s)/2,oy=(cv.height-dy*s)/2;
+  const X=q=>ox+(q[0]-x0)*s,Y=q=>oy+(q[1]-y0)*s;
+  ctx.clearRect(0,0,cv.width,cv.height);
+  if(!$('tr').checked){ctx.fillStyle=$('bg').value;ctx.fillRect(0,0,cv.width,cv.height)}
+  ctx.lineWidth=+$('lw').value*k;ctx.lineJoin=ctx.lineCap='round';
+  PG.forEach(g=>{ctx.strokeStyle=g.c;ctx.beginPath();g.p.forEach((q,i)=>i?ctx.lineTo(X(q),Y(q)):ctx.moveTo(X(q),Y(q)));ctx.stroke()});
+  if(start&&$('sm').checked){const q=proj(start.pt),sx=X(q),sy=Y(q),sr=11*k;
+    ctx.lineWidth=sr*.55;ctx.strokeStyle='#fff';ctx.beginPath();ctx.arc(sx,sy,sr,0,7);ctx.stroke();
+    ctx.lineWidth=sr*.3;ctx.strokeStyle='#3f6b2f';ctx.beginPath();ctx.arc(sx,sy,sr,0,7);ctx.stroke()}
+  pp.forEach((p,i)=>{
+    const x=X(PP[i]),y=Y(PP[i]),r=p.size*k;
+    shape(ctx,p.shape,x,y,r,p.color);
+    const txt=[p.label,$('dd').checked&&p.dist].filter(Boolean).join('  ');
+    if(txt){
+      ctx.font=`bold ${Math.round(r*1.5)}px system-ui,sans-serif`;ctx.textAlign='left';ctx.textBaseline='middle';
+      const tw=ctx.measureText(txt).width,m=10*k,fs=r*1.5;
+      let lx=x+r*1.4,al='left';
+      if(lx+tw>cv.width-m){lx=x-r*1.4;al='right';
+        if(lx-tw<m){al='left';lx=Math.max(m,Math.min(cv.width-m-tw,x-tw/2))}}
+      const ly=Math.max(m+fs/2,Math.min(cv.height-m-fs/2,y));
+      ctx.textAlign=al;
+      ctx.lineWidth=r*.5;ctx.strokeStyle='#fff';ctx.lineJoin='round';ctx.strokeText(txt,lx,ly);
+      ctx.fillStyle='#111';ctx.fillText(txt,lx,ly);
+    }
+  });
+  updatePointText();
+  if($('na').checked)northArrow(cv.width,k,th);
+}
+function updatePointText(){
+  points.forEach(p=>{if(p._sp)p._sp.textContent=(p.label?p.label+' ':'')+p.lat.toFixed(4)+', '+p.lon.toFixed(4)+(p.dist?' · '+p.dist:p.nd?' · 不同路線':'')});
+}
+function northArrow(w,k,th){
+  const s=20*k,cx=w-62*k,cy=62*k;
+  ctx.save();ctx.translate(cx,cy);ctx.rotate(th);ctx.fillStyle='#222';
+  ctx.beginPath();ctx.moveTo(0,-s);ctx.lineTo(s*.5,s*.8);ctx.lineTo(0,s*.4);ctx.lineTo(-s*.5,s*.8);ctx.closePath();ctx.fill();
+  ctx.restore();
+  ctx.font=`bold ${Math.round(s*.9)}px system-ui,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText('N',cx+Math.sin(th)*s*1.7,cy-Math.cos(th)*s*1.7);
+}
+function renderPoints(){
+  const box=$('plist');box.innerHTML='';
+  points.forEach((p,i)=>{
+    const r=document.createElement('div');r.className='item';
+    const sp=document.createElement('span');
+    sp.textContent=(p.label?p.label+' ':'')+p.lat.toFixed(4)+', '+p.lon.toFixed(4);p._sp=sp;
+    const sel=document.createElement('select');
+    [['circle','圓形'],['triangle','三角形'],['square','正方形'],['drop','水滴']].forEach(([v,t])=>{
+      const o=new Option(t,v);if(v==p.shape)o.selected=true;sel.add(o)});
+    sel.onchange=()=>{p.shape=sel.value;draw()};
+    const col=document.createElement('input');col.type='color';col.value=p.color;
+    col.oninput=()=>{p.color=col.value;draw()};
+    const x=document.createElement('button');x.textContent='×';
+    x.onclick=()=>{points.splice(i,1);renderPoints();draw()};
+    r.append(sp,sel,col,x);box.appendChild(r);
+  });
+}
+$('add').onclick=()=>{
+  const m=$('pin').value.match(/-?\d+(\.\d+)?/g);
+  if(!m||m.length<2||Math.abs(+m[0])>90||Math.abs(+m[1])>180){$('perr').textContent='請輸入「緯度, 經度」';return}
+  $('perr').textContent='';
+  points.push({lat:+m[0],lon:+m[1],label:$('plb').value.trim(),shape:$('ps').value,color:$('pc').value,size:+$('pz').value,snap:$('snap').checked});
+  $('pin').value='';$('plb').value='';renderPoints();draw();
+};
+$('pin').addEventListener('keydown',e=>{if(e.key=='Enter')$('add').click()});
+$('lw').oninput=()=>{$('lwv').textContent=$('lw').value;draw()};
+$('pz').oninput=()=>{$('pzv').textContent=$('pz').value};
+['lc','bg','tr','merge','ow','na','snap','multi'].forEach(id=>$(id).addEventListener('input',draw));
+$('dl').onclick=()=>{
+  cv.toBlob(b=>{
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);
+    a.download='gpx-track.png';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  },'image/png');
+};
+$('rot').addEventListener('input',()=>{rotDeg=+$('rot').value;$('rotn').value=rotDeg;resetView();draw()});
+$('rotn').addEventListener('input',()=>{
+  const v=parseFloat($('rotn').value);if(!isFinite(v))return;
+  rotDeg=((v%360)+360)%360;$('rot').value=Math.min(359,Math.round(rotDeg));resetView();draw();
+});
+$('rotn').addEventListener('change',()=>{$('rotn').value=Math.round(rotDeg*100)/100});
+vp.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const rc=cv.getBoundingClientRect(),cx=e.clientX-rc.left,cy=e.clientY-rc.top;
+  const z2=Math.min(30,Math.max(1,view.z*Math.exp(-e.deltaY*.0015))),f=1-z2/view.z;
+  view.x+=cx*f;view.y+=cy*f;view.z=z2;applyView();
+},{passive:false});
+let drag=null;
+vp.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};vp.setPointerCapture(e.pointerId)});
+vp.addEventListener('pointermove',e=>{if(!drag)return;view.x+=e.clientX-drag.x;view.y+=e.clientY-drag.y;drag={x:e.clientX,y:e.clientY};applyView()});
+['pointerup','pointercancel'].forEach(t=>vp.addEventListener(t,()=>{drag=null}));
+vp.addEventListener('dblclick',resetView);
+$('rv').onclick=resetView;
+$('ss').addEventListener('change',()=>{startSel=$('ss').value;$('sc').style.display=startSel==='custom'?'':'none';draw()});
+$('sc').addEventListener('input',()=>{const m=$('sc').value.match(/-?\d+(\.\d+)?/g);customStart=m&&m.length>=2&&Math.abs(+m[0])<=90&&Math.abs(+m[1])<=180?[+m[0],+m[1]]:null;draw()});
+$('dd').addEventListener('input',draw);
+$('sm').addEventListener('input',draw);
+renderStartOpts();
+$('multi').addEventListener('input',renderFiles);
+draw();
+</script>
+</body>
+</html>
