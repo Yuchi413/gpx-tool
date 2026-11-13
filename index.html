@@ -20,7 +20,7 @@ body{margin:0;font:14px/1.5 system-ui,-apple-system,"Noto Sans TC",sans-serif;ba
  .right{order:-1;top:0;z-index:20;background:var(--bg);padding:8px 0 4px}
  .right .card{margin-bottom:0;padding:8px 10px}
  .ph{display:none}
- input[type=text],input[type=number],select{font-size:16px}
+ input[type=text],input[type=number],select,textarea{font-size:16px}
  button{padding:9px 14px}
 }
 .card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:12px}
@@ -32,6 +32,7 @@ input[type=color]{width:40px;height:28px;padding:0;border:1px solid var(--bd);bo
 button{padding:7px 12px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--tx);cursor:pointer;font:inherit}
 button.p{background:var(--ac);border-color:var(--ac);color:#fff}
 .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+.row select{width:auto}
 .item{display:flex;gap:6px;align-items:center;padding:4px 0;border-top:1px solid var(--bd);font-size:12px}
 .item span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .item select{width:78px}
@@ -67,6 +68,12 @@ canvas{display:block;transform-origin:0 0}
    <select id="ow" style="width:110px"><option value="1200">1200 px</option><option value="1600" selected>1600 px</option><option value="2400">2400 px</option><option value="3200">3200 px</option></select></label>
  </div>
  <div class="card">
+  <h2>統計與剖面圖</h2>
+  <label><span>圖上顯示統計資訊</span><input type="checkbox" id="st" checked></label>
+  <label><span>下方附高度剖面圖（含點位）</span><input type="checkbox" id="pf" checked></label>
+  <div class="hint">需要 GPX 內含海拔資料。爬升與下降會先平滑處理，並忽略 3 公尺內的起伏。</div>
+ </div>
+ <div class="card">
   <h2>起點與距離</h2>
   <select id="ss"></select>
   <input type="text" id="sc" placeholder="起點座標：緯度, 經度" style="margin-top:6px;display:none">
@@ -84,14 +91,20 @@ canvas{display:block;transform-origin:0 0}
   <label>大小<input type="range" id="pz" min="4" max="40" value="14"><b id="pzv">14</b></label>
   <label><span>吸附到最近的路線（圖形中心落在路線上）</span><input type="checkbox" id="snap" checked></label>
   <div class="row"><button class="p" id="add">加入點位</button><span class="hint" id="perr"></span></div>
+  <details style="margin-top:10px"><summary style="cursor:pointer;color:var(--ac)">批次匯入</summary>
+   <textarea id="bulk" rows="5" style="margin-top:6px" placeholder="每行一個點位：緯度, 經度, 標籤&#10;25.0330, 121.5654, 台北101"></textarea>
+   <div class="row"><button id="bi">匯入文字</button><button id="bf">選擇 CSV 檔</button></div>
+   <input type="file" id="bcsv" accept=".csv,.txt,text/csv,text/plain" hidden>
+   <div class="hint" id="bmsg">格式：座標在前、標籤在後，以逗號、分號或空白分隔；CSV 請存成 UTF-8。</div>
+  </details>
   <div id="plist" style="margin-top:8px"></div>
  </div>
 </div>
 <div class="right">
  <div class="card">
-  <div class="row" style="margin:0 0 10px"><h2 style="margin:0;flex:1">預覽</h2><button id="rv">重設檢視</button><button class="p" id="dl">下載 PNG</button></div>
+  <div class="row" style="margin:0 0 10px"><h2 style="margin:0;flex:1">預覽</h2><button id="rv">重設檢視</button><select id="fmt"><option value="png">PNG</option><option value="svg">SVG</option><option value="pdf">PDF</option></select><button class="p" id="dl">下載</button></div>
   <div class="stage"><div id="vp"><canvas id="cv" width="800" height="500"></canvas></div></div>
-  <div class="hint ph" style="margin-top:6px">滑鼠滾輪縮放、拖曳平移、雙擊重設檢視</div>
+  <div class="hint ph" style="margin-top:6px">滾輪或雙指縮放、拖曳平移、雙擊重設檢視</div>
  </div>
 </div>
 </div>
@@ -105,7 +118,7 @@ function parseGPX(txt,name){
   const d=new DOMParser().parseFromString(txt,'application/xml');
   let els=[...d.getElementsByTagName('trkpt')];
   if(!els.length)els=[...d.getElementsByTagName('rtept')];
-  const pts=els.map(e=>[+e.getAttribute('lat'),+e.getAttribute('lon')]).filter(p=>isFinite(p[0])&&isFinite(p[1]));
+  const pts=els.map(e=>{const el=e.getElementsByTagName('ele')[0],z=el?parseFloat(el.textContent):NaN;return[+e.getAttribute('lat'),+e.getAttribute('lon'),isFinite(z)?z:null]}).filter(p=>isFinite(p[0])&&isFinite(p[1]));
   return pts.length?{name,pts}:null;
 }
 $('file').addEventListener('change',async e=>{
@@ -180,7 +193,151 @@ function shape(c,type,x,y,r,col){
   c.fill();
   c.lineWidth=Math.max(1,r*.15);c.strokeStyle='#fff';c.stroke();
 }
-let rotDeg=0,startSel='auto',customStart=null;
+let rotDeg=0,startSel='auto',customStart=null,lastPaint=null;
+function havd(a,b){const t=Math.PI/180,h=Math.sin((b[0]-a[0])*t/2)**2+Math.cos(a[0]*t)*Math.cos(b[0]*t)*Math.sin((b[1]-a[1])*t/2)**2;return 2*6371008.8*Math.asin(Math.sqrt(h))}
+function lum(h){const n=parseInt(h.slice(1),16);return(.299*(n>>16&255)+.587*(n>>8&255)+.114*(n&255))/255}
+function smoothEle(l){
+  const n=l.length,o=new Array(n);
+  for(let i=0;i<n;i++){let s=0,c=0;for(let j=Math.max(0,i-2);j<=Math.min(n-1,i+2);j++){const v=l[j][2];if(v!=null){s+=v;c++}}o[i]=c?s/c:null}
+  return o;
+}
+function climb(e,thr=3){let up=0,dn=0,ref=null;for(const v of e){if(v==null)continue;if(ref==null){ref=v;continue}const d=v-ref;if(d>=thr){up+=d;ref=v}else if(d<=-thr){dn-=d;ref=v}}return[up,dn]}
+function calcStats(){
+  if(!tracks.length)return null;
+  let d=0,up=0,dn=0,mx=-1e9,has=false;
+  tracks.forEach(t=>{
+    for(let i=1;i<t.pts.length;i++)d+=havd(t.pts[i-1],t.pts[i]);
+    const e=smoothEle(t.pts);
+    if(e.some(v=>v!=null)){has=true;const[u,w]=climb(e);up+=u;dn+=w;e.forEach(v=>{if(v!=null&&v>mx)mx=v})}
+  });
+  return{d:d/1000,up,dn,max:mx,has};
+}
+function nice(x){const p=10**Math.floor(Math.log10(x)),f=x/p;return(f<1.5?1:f<3?2:f<7?5:10)*p}
+function drawStats(c,k,w,H,st,ink){
+  const f=v=>Math.round(v).toLocaleString();
+  const it=[['總距離',st.d.toFixed(2)+' km']];
+  if(st.has)it.push(['累積爬升','+'+f(st.up)+' m'],['累積下降','-'+f(st.dn)+' m'],['最高點',f(st.max)+' m']);
+  const cw=w/it.length;c.textAlign='center';c.textBaseline='middle';
+  it.forEach((v,i)=>{
+    let fs=30*k;c.font=`bold ${fs}px system-ui,sans-serif`;
+    while(c.measureText(v[1]).width>cw-24*k&&fs>10*k){fs*=.92;c.font=`bold ${fs}px system-ui,sans-serif`}
+    c.fillStyle=ink.t;c.fillText(v[1],cw*(i+.5),H*.62);
+    c.font=`${18*k}px system-ui,sans-serif`;c.fillStyle=ink.m;c.fillText(v[0],cw*(i+.5),H*.26);
+  });
+  c.fillStyle=ink.m;c.globalAlpha=.35;c.fillRect(40*k,H-2*k,w-80*k,2*k);c.globalAlpha=1;
+}
+function drawProfile(c,k,W,top,Hp,d,ink,showStart){
+  const L=100*k,R=50*k,T=top+40*k,B=top+Hp-56*k,w=W-L-R,hh=B-T;
+  let lo=d.min,hi=d.max;if(hi-lo<20){const m=(hi+lo)/2;lo=m-10;hi=m+10}
+  const pe=(hi-lo)*.08;lo-=pe;hi+=pe;
+  const X=v=>L+v/d.total*w,Y=v=>B-(v-lo)/(hi-lo)*hh;
+  c.font=`${16*k}px system-ui,sans-serif`;c.textBaseline='middle';
+  const es=nice((hi-lo)/4);
+  for(let v=Math.ceil(lo/es)*es;v<=hi;v+=es){
+    c.globalAlpha=.25;c.fillStyle=ink.m;c.fillRect(L,Y(v)-k/2,w,k);c.globalAlpha=1;
+    c.textAlign='right';c.fillText(Math.round(v).toLocaleString(),L-10*k,Y(v));
+  }
+  const xs=nice(d.total/1000/6);
+  c.textAlign='center';
+  for(let i=0;i*xs*1000<=d.total+1e-6;i++)c.fillText((+(i*xs).toFixed(2)).toString(),X(i*xs*1000),B+22*k);
+  c.fillRect(L,B,w,2*k);
+  c.textAlign='left';c.fillText('海拔 (m)',20*k,T-20*k);
+  c.textAlign='center';c.fillText('距離 (km)',L+w/2,B+46*k);
+  d.segs.forEach(sg=>{
+    const n=sg.xs.length;
+    c.beginPath();c.moveTo(X(sg.xs[0]),B);sg.xs.forEach((x,i)=>c.lineTo(X(x),Y(sg.ys[i])));c.lineTo(X(sg.xs[n-1]),B);c.closePath();
+    c.globalAlpha=.2;c.fillStyle=sg.color;c.fill();c.globalAlpha=1;
+    c.beginPath();sg.xs.forEach((x,i)=>i?c.lineTo(X(x),Y(sg.ys[i])):c.moveTo(X(x),Y(sg.ys[i])));
+    c.strokeStyle=sg.color;c.lineWidth=3*k;c.lineJoin='round';c.stroke();
+  });
+  if(showStart&&d.start){const sx=X(d.start.x),sy=Y(d.start.y),sr=9*k;
+    c.lineWidth=sr*.55;c.strokeStyle='#fff';c.beginPath();c.arc(sx,sy,sr,0,7);c.stroke();
+    c.lineWidth=sr*.3;c.strokeStyle='#3f6b2f';c.beginPath();c.arc(sx,sy,sr,0,7);c.stroke()}
+  d.pts.forEach(p=>{
+    const x=X(p.x),y=Y(p.y),r=p.size*k*.7;
+    shape(c,p.shape,x,y,r,p.color);
+    if(p.label){
+      c.font=`bold ${15*k}px system-ui,sans-serif`;c.textAlign='center';c.textBaseline='middle';
+      const tw=c.measureText(p.label).width,lx=Math.max(8*k+tw/2,Math.min(W-8*k-tw/2,x));
+      let ly=y-r*2.7-6*k;if(ly<top+10*k)ly=y+r*2.2+8*k;
+      c.lineWidth=4*k;c.strokeStyle='#fff';c.lineJoin='round';c.strokeText(p.label,lx,ly);
+      c.fillStyle='#111';c.fillText(p.label,lx,ly);
+    }
+  });
+}
+class SvgCtx{
+  constructor(w,h){this.w=w;this.h=h;this.o=[];this.d='';this.m=[1,0,0,1,0,0];this.st=[];
+    this.fillStyle='#000';this.strokeStyle='#000';this.lineWidth=1;this.lineJoin='miter';this.lineCap='butt';
+    this.font='10px sans-serif';this.textAlign='left';this.textBaseline='alphabetic';this.globalAlpha=1;
+    this.mc=document.createElement('canvas').getContext('2d')}
+  P(x,y){const m=this.m;return[(m[0]*x+m[2]*y+m[4]).toFixed(2),(m[1]*x+m[3]*y+m[5]).toFixed(2)]}
+  save(){this.st.push({m:this.m.slice(),f:this.fillStyle,s:this.strokeStyle,l:this.lineWidth,a:this.globalAlpha})}
+  restore(){const s=this.st.pop();if(s){this.m=s.m;this.fillStyle=s.f;this.strokeStyle=s.s;this.lineWidth=s.l;this.globalAlpha=s.a}}
+  translate(x,y){const m=this.m;m[4]+=m[0]*x+m[2]*y;m[5]+=m[1]*x+m[3]*y}
+  rotate(a){const m=this.m,c=Math.cos(a),s=Math.sin(a),a0=m[0],b0=m[1],c0=m[2],d0=m[3];
+    m[0]=a0*c+c0*s;m[1]=b0*c+d0*s;m[2]=-a0*s+c0*c;m[3]=-b0*s+d0*c}
+  beginPath(){this.d=''}
+  closePath(){this.d+='Z'}
+  moveTo(x,y){this.d+='M'+this.P(x,y).join(' ')}
+  lineTo(x,y){this.d+=(this.d?'L':'M')+this.P(x,y).join(' ')}
+  bezierCurveTo(a,b,c,d,e,f){this.d+='C'+this.P(a,b).join(' ')+' '+this.P(c,d).join(' ')+' '+this.P(e,f).join(' ')}
+  rect(x,y,w,h){this.moveTo(x,y);this.lineTo(x+w,y);this.lineTo(x+w,y+h);this.lineTo(x,y+h);this.closePath()}
+  arc(cx,cy,r,a0,a1,ac){
+    const T=2*Math.PI;let da=a1-a0;
+    if(!ac){while(da<0)da+=T;if(da>T)da=T}else{while(da>0)da-=T;if(da<-T)da=-T}
+    const pt=a=>this.P(cx+r*Math.cos(a),cy+r*Math.sin(a)),s=pt(a0),sw=ac?0:1;
+    this.d+=(this.d?'L':'M')+s.join(' ');
+    if(Math.abs(da)>=T-1e-9){const m=pt(a0+Math.PI);this.d+=`A${r} ${r} 0 0 ${sw} ${m.join(' ')}A${r} ${r} 0 0 ${sw} ${s.join(' ')}`}
+    else this.d+=`A${r} ${r} 0 ${Math.abs(da)>Math.PI?1:0} ${sw} ${pt(a0+da).join(' ')}`;
+  }
+  fill(){if(this.d)this.o.push(`<path d="${this.d}" fill="${this.fillStyle}" fill-opacity="${this.globalAlpha}"/>`)}
+  stroke(){if(this.d)this.o.push(`<path d="${this.d}" fill="none" stroke="${this.strokeStyle}" stroke-opacity="${this.globalAlpha}" stroke-width="${this.lineWidth}" stroke-linejoin="${this.lineJoin}" stroke-linecap="${this.lineCap}"/>`)}
+  fillRect(x,y,w,h){const[a,b]=this.P(x,y);this.o.push(`<rect x="${a}" y="${b}" width="${w}" height="${h}" fill="${this.fillStyle}" fill-opacity="${this.globalAlpha}"/>`)}
+  clearRect(){}
+  measureText(t){this.mc.font=this.font;return this.mc.measureText(t)}
+  _t(t,x,y,stroke){
+    const m=/^(bold )?([\d.]+)px (.*)$/.exec(this.font)||[],[X,Y]=this.P(x,y);
+    const esc=String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const an={left:'start',right:'end',center:'middle'}[this.textAlign]||'start';
+    const paint=stroke?`fill="none" stroke="${this.strokeStyle}" stroke-width="${this.lineWidth}" stroke-linejoin="round"`:`fill="${this.fillStyle}" fill-opacity="${this.globalAlpha}"`;
+    this.o.push(`<text x="${X}" y="${Y}" text-anchor="${an}"${this.textBaseline==='middle'?' dominant-baseline="central"':''} font-size="${m[2]||10}"${m[1]?' font-weight="bold"':''} font-family="${m[3]||'sans-serif'}, 'Noto Sans TC'" ${paint}>${esc}</text>`);
+  }
+  fillText(t,x,y){this._t(t,x,y,false)}
+  strokeText(t,x,y){this._t(t,x,y,true)}
+  toString(){return`<svg xmlns="http://www.w3.org/2000/svg" width="${this.w}" height="${this.h}" viewBox="0 0 ${this.w} ${this.h}">\n${this.o.join('\n')}\n</svg>`}
+}
+function pdfBlob(jpg,iw,ih){
+  const enc=new TextEncoder(),parts=[],o=[];let len=0;
+  const add=x=>{const u=typeof x==='string'?enc.encode(x):x;parts.push(u);len+=u.length};
+  const begin=n=>{o[n]=len;add(n+' 0 obj\n')};
+  const land=iw>ih,PW=land?842:595,PH=land?595:842,m=28,sc=Math.min((PW-2*m)/iw,(PH-2*m)/ih),w=iw*sc,h=ih*sc;
+  add('%PDF-1.4\n');
+  begin(1);add('<</Type/Catalog/Pages 2 0 R>>\nendobj\n');
+  begin(2);add('<</Type/Pages/Kids[3 0 R]/Count 1>>\nendobj\n');
+  begin(3);add(`<</Type/Page/Parent 2 0 R/MediaBox[0 0 ${PW} ${PH}]/Resources<</XObject<</Im0 5 0 R>>>>/Contents 4 0 R>>\nendobj\n`);
+  const cs=`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} ${((PW-w)/2).toFixed(2)} ${((PH-h)/2).toFixed(2)} cm /Im0 Do Q`;
+  begin(4);add(`<</Length ${cs.length}>>\nstream\n${cs}\nendstream\nendobj\n`);
+  begin(5);add(`<</Type/XObject/Subtype/Image/Width ${iw}/Height ${ih}/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/DCTDecode/Length ${jpg.length}>>\nstream\n`);add(jpg);add('\nendstream\nendobj\n');
+  const xr=len;add('xref\n0 6\n0000000000 65535 f \n');
+  for(let i=1;i<=5;i++)add(String(o[i]).padStart(10,'0')+' 00000 n \n');
+  add(`trailer\n<</Size 6/Root 1 0 R>>\nstartxref\n${xr}\n%%EOF`);
+  return new Blob(parts,{type:'application/pdf'});
+}
+function save(blob,name){const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+function parseBulk(txt){
+  const out=[];let skip=0;const num=t=>/^-?\d+(\.\d+)?$/.test(t);
+  txt.replace(/^\uFEFF/,'').split(/\r?\n/).forEach(line=>{
+    line=line.trim();if(!line)return;
+    let sep=', ',tk=line.split(/[,;\t]/).map(t=>t.trim().replace(/^["']|["']$/g,'')).filter(t=>t!=='');
+    if(tk.filter(num).length<2){sep=' ';tk=line.replace(/[,;]/g,' ').split(/\s+/).filter(Boolean)}
+    const ni=[];tk.forEach((t,i)=>{if(num(t)&&ni.length<2)ni.push(i)});
+    if(ni.length<2){skip++;return}
+    const la=+tk[ni[0]],lo=+tk[ni[1]];
+    if(Math.abs(la)>90||Math.abs(lo)>180){skip++;return}
+    out.push({lat:la,lon:lo,label:tk.filter((t,i)=>i!==ni[0]&&i!==ni[1]).join(sep)});
+  });
+  return{out,skip};
+}
 const view={z:1,x:0,y:0};
 function applyView(){
   const w=vp.clientWidth,h=vp.clientHeight;
@@ -210,7 +367,7 @@ function draw0(){
     }
   }
   const allRaw=lines.flat().concat(points.map(p=>[p.lat,p.lon]));
-  if(!allRaw.length){cv.width=800;cv.height=500;ctx.clearRect(0,0,800,500);
+  if(!allRaw.length){lastPaint=null;cv.width=800;cv.height=500;ctx.clearRect(0,0,800,500);
     ctx.fillStyle='#888';ctx.font='20px sans-serif';ctx.textAlign='center';
     ctx.fillText('請上傳 GPX 檔案',400,250);return}
   let la0=90,la1=-90;for(const p of allRaw){if(p[0]<la0)la0=p[0];if(p[0]>la1)la1=p[0]}
@@ -220,20 +377,36 @@ function draw0(){
   const posOf=o=>{const c=cum[o.li],n=c[o.i+1];return c[o.i]+(n===undefined?0:o.t*(n-c[o.i]))};
   const sel=startSel==='auto'?(tracks.length?'file-0':'none'):startSel;
   let start=null;
-  if(lines.length&&sel==='custom'&&customStart){const o=snapTo(lines,customStart,cl);start={li:o.li,pos:posOf(o),pt:o.pt}}
+  if(lines.length&&sel==='custom'&&customStart){const o=snapTo(lines,customStart,cl);start={li:o.li,pos:posOf(o),pt:o.pt,o}}
   else if(lines.length&&sel.startsWith('file-')){
     const kf=+sel.slice(5);
-    if(ch){let off=0;for(const c of ch){if(c.idx===kf){const vi=c.rev?off+c.pts.length-1:off;start={li:0,pos:cum[0][vi],pt:lines[0][vi]};break}off+=c.pts.length}}
-    else if(kf<lines.length)start={li:kf,pos:0,pt:lines[kf][0]};
+    if(ch){let off=0;for(const c of ch){if(c.idx===kf){const vi=c.rev?off+c.pts.length-1:off;start={li:0,pos:cum[0][vi],pt:lines[0][vi],o:{li:0,i:vi,t:0}};break}off+=c.pts.length}}
+    else if(kf<lines.length)start={li:kf,pos:0,pt:lines[kf][0],o:{li:kf,i:0,t:0}};
   }
   const snapOn=$('snap').checked&&lines.length>0;
   const pp=points.map(p=>{
     const raw=[p.lat,p.lon],o=lines.length?snapTo(lines,raw,cl):null;
     let dist=null,nd=false;
     if(start&&o){if(o.li===start.li)dist=(Math.abs(posOf(o)-start.pos)/1000).toFixed(2)+' km';else nd=true}
-    return{...p,q:snapOn&&o?o.pt:raw,dist,nd};
+    return{...p,q:snapOn&&o?o.pt:raw,dist,nd,o};
   });
   points.forEach((p,i)=>{p.dist=pp[i].dist;p.nd=pp[i].nd});
+  const stats=$('st').checked?calcStats():null;
+  const eS=lines.map(smoothEle);
+  const offs=[0];cum.forEach((c,i)=>offs.push(offs[i]+c[c.length-1]));
+  const eleAt=o=>{const a=eS[o.li][o.i];let b=eS[o.li][o.i+1];if(a==null&&b==null)return null;const A=a==null?b:a;if(b==null)b=A;return A+(b-A)*o.t};
+  let prof=null;
+  if($('pf').checked&&eS.some(a=>a.some(v=>v!=null))){
+    const segs=[];let mn=1e9,mx=-1e9;
+    lines.forEach((l,li)=>{const xs=[],ys=[];
+      eS[li].forEach((v,i)=>{if(v!=null){xs.push(offs[li]+cum[li][i]);ys.push(v);if(v<mn)mn=v;if(v>mx)mx=v}});
+      if(xs.length>1)segs.push({xs,ys,color:multi&&!ch?tracks[li].color:lc})});
+    const pts=[];
+    pp.forEach(p=>{if(!p.o)return;const y=eleAt(p.o);if(y!=null)pts.push({x:offs[p.o.li]+posOf(p.o),y,shape:p.shape,color:p.color,size:p.size,label:p.label})});
+    prof={segs,min:mn,max:mx,total:offs[offs.length-1],pts,start:null};
+    if(start&&start.o){const y=eleAt(start.o);if(y!=null)prof.start={x:offs[start.o.li]+start.pos,y}}
+    if(!segs.length||!(prof.total>0))prof=null;
+  }
   const proj=p=>{const x=p[1]*cl,y=-p[0];return[x*cs-y*sn,x*sn+y*cs]};
   const PG=groups.map(g=>({c:g.color,p:g.pts.map(proj)})),PP=pp.map(p=>proj(p.q));
   let x0=1e18,x1=-1e18,y0=1e18,y1=-1e18;
@@ -243,45 +416,52 @@ function draw0(){
   const pad=90*k;let w=W,s=(w-2*pad)/dx,h=dy*s+2*pad;
   const maxH=W*1.6;
   if(h>maxH){h=maxH;s=(h-2*pad)/dy;w=dx*s+2*pad}
-  cv.width=Math.round(w);cv.height=Math.round(h);
-  const ox=(cv.width-dx*s)/2,oy=(cv.height-dy*s)/2;
-  const X=q=>ox+(q[0]-x0)*s,Y=q=>oy+(q[1]-y0)*s;
-  ctx.clearRect(0,0,cv.width,cv.height);
-  if(!$('tr').checked){ctx.fillStyle=$('bg').value;ctx.fillRect(0,0,cv.width,cv.height)}
-  ctx.lineWidth=+$('lw').value*k;ctx.lineJoin=ctx.lineCap='round';
-  PG.forEach(g=>{ctx.strokeStyle=g.c;ctx.beginPath();g.p.forEach((q,i)=>i?ctx.lineTo(X(q),Y(q)):ctx.moveTo(X(q),Y(q)));ctx.stroke()});
+  const top=stats?Math.round(86*k):0,mapH=Math.round(h),Hp=prof?Math.round(340*k):0;
+  cv.width=Math.round(w);cv.height=top+mapH+Hp;
+  const ox=(cv.width-dx*s)/2,oy=(mapH-dy*s)/2;
+  const X=q=>ox+(q[0]-x0)*s,Y=q=>top+oy+(q[1]-y0)*s;
+  const dark=!$('tr').checked&&lum($('bg').value)<.5,ink=dark?{t:'#f1ebdc',m:'#b8ad94'}:{t:'#2b241a',m:'#7b6b55'};
+  const paint=c=>{
+  c.clearRect(0,0,cv.width,cv.height);
+  if(!$('tr').checked){c.fillStyle=$('bg').value;c.fillRect(0,0,cv.width,cv.height)}
+  if(stats)drawStats(c,k,cv.width,top,stats,ink);
+  c.lineWidth=+$('lw').value*k;c.lineJoin=c.lineCap='round';
+  PG.forEach(g=>{c.strokeStyle=g.c;c.beginPath();g.p.forEach((q,i)=>i?c.lineTo(X(q),Y(q)):c.moveTo(X(q),Y(q)));c.stroke()});
   if(start&&$('sm').checked){const q=proj(start.pt),sx=X(q),sy=Y(q),sr=11*k;
-    ctx.lineWidth=sr*.55;ctx.strokeStyle='#fff';ctx.beginPath();ctx.arc(sx,sy,sr,0,7);ctx.stroke();
-    ctx.lineWidth=sr*.3;ctx.strokeStyle='#3f6b2f';ctx.beginPath();ctx.arc(sx,sy,sr,0,7);ctx.stroke()}
+    c.lineWidth=sr*.55;c.strokeStyle='#fff';c.beginPath();c.arc(sx,sy,sr,0,7);c.stroke();
+    c.lineWidth=sr*.3;c.strokeStyle='#3f6b2f';c.beginPath();c.arc(sx,sy,sr,0,7);c.stroke()}
   pp.forEach((p,i)=>{
     const x=X(PP[i]),y=Y(PP[i]),r=p.size*k;
-    shape(ctx,p.shape,x,y,r,p.color);
+    shape(c,p.shape,x,y,r,p.color);
     const txt=[p.label,$('dd').checked&&p.dist].filter(Boolean).join('  ');
     if(txt){
-      ctx.font=`bold ${Math.round(r*1.5)}px system-ui,sans-serif`;ctx.textAlign='left';ctx.textBaseline='middle';
-      const tw=ctx.measureText(txt).width,m=10*k,fs=r*1.5;
+      c.font=`bold ${Math.round(r*1.5)}px system-ui,sans-serif`;c.textAlign='left';c.textBaseline='middle';
+      const tw=c.measureText(txt).width,m=10*k,fs=r*1.5;
       let lx=x+r*1.4,al='left';
       if(lx+tw>cv.width-m){lx=x-r*1.4;al='right';
         if(lx-tw<m){al='left';lx=Math.max(m,Math.min(cv.width-m-tw,x-tw/2))}}
-      const ly=Math.max(m+fs/2,Math.min(cv.height-m-fs/2,y));
-      ctx.textAlign=al;
-      ctx.lineWidth=r*.5;ctx.strokeStyle='#fff';ctx.lineJoin='round';ctx.strokeText(txt,lx,ly);
-      ctx.fillStyle='#111';ctx.fillText(txt,lx,ly);
+      const ly=Math.max(top+m+fs/2,Math.min(top+mapH-m-fs/2,y));
+      c.textAlign=al;
+      c.lineWidth=r*.5;c.strokeStyle='#fff';c.lineJoin='round';c.strokeText(txt,lx,ly);
+      c.fillStyle='#111';c.fillText(txt,lx,ly);
     }
   });
+  if(prof)drawProfile(c,k,cv.width,top+mapH,Hp,prof,ink,$('sm').checked);
   updatePointText();
-  if($('na').checked)northArrow(cv.width,k,th);
+  if($('na').checked)northArrow(c,cv.width,k,th,top,ink.t);
+  };
+  paint(ctx);lastPaint=paint;
 }
 function updatePointText(){
   points.forEach(p=>{if(p._sp)p._sp.textContent=(p.label?p.label+' ':'')+p.lat.toFixed(4)+', '+p.lon.toFixed(4)+(p.dist?' · '+p.dist:p.nd?' · 不同路線':'')});
 }
-function northArrow(w,k,th){
-  const s=20*k,cx=w-62*k,cy=62*k;
-  ctx.save();ctx.translate(cx,cy);ctx.rotate(th);ctx.fillStyle='#222';
-  ctx.beginPath();ctx.moveTo(0,-s);ctx.lineTo(s*.5,s*.8);ctx.lineTo(0,s*.4);ctx.lineTo(-s*.5,s*.8);ctx.closePath();ctx.fill();
-  ctx.restore();
-  ctx.font=`bold ${Math.round(s*.9)}px system-ui,sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';
-  ctx.fillText('N',cx+Math.sin(th)*s*1.7,cy-Math.cos(th)*s*1.7);
+function northArrow(c,w,k,th,top,col){
+  const s=20*k,cx=w-62*k,cy=top+62*k;
+  c.save();c.translate(cx,cy);c.rotate(th);c.fillStyle=col;
+  c.beginPath();c.moveTo(0,-s);c.lineTo(s*.5,s*.8);c.lineTo(0,s*.4);c.lineTo(-s*.5,s*.8);c.closePath();c.fill();
+  c.restore();
+  c.fillStyle=col;c.font=`bold ${Math.round(s*.9)}px system-ui,sans-serif`;c.textAlign='center';c.textBaseline='middle';
+  c.fillText('N',cx+Math.sin(th)*s*1.7,cy-Math.cos(th)*s*1.7);
 }
 function renderPoints(){
   const box=$('plist');box.innerHTML='';
@@ -310,13 +490,16 @@ $('add').onclick=()=>{
 $('pin').addEventListener('keydown',e=>{if(e.key=='Enter')$('add').click()});
 $('lw').oninput=()=>{$('lwv').textContent=$('lw').value;draw()};
 $('pz').oninput=()=>{$('pzv').textContent=$('pz').value};
-['lc','bg','tr','merge','ow','na','snap','multi'].forEach(id=>$(id).addEventListener('input',draw));
+['lc','bg','tr','merge','ow','na','snap','multi','st','pf'].forEach(id=>$(id).addEventListener('input',draw));
 $('dl').onclick=()=>{
-  cv.toBlob(b=>{
-    const a=document.createElement('a');a.href=URL.createObjectURL(b);
-    a.download='gpx-track.png';document.body.appendChild(a);a.click();a.remove();
-    setTimeout(()=>URL.revokeObjectURL(a.href),2000);
-  },'image/png');
+  const f=$('fmt').value;
+  if(f==='png')cv.toBlob(b=>save(b,'gpx-track.png'),'image/png');
+  else if(f==='svg'){if(!lastPaint)return;const sv=new SvgCtx(cv.width,cv.height);lastPaint(sv);save(new Blob([sv.toString()],{type:'image/svg+xml'}),'gpx-track.svg')}
+  else{
+    const t=document.createElement('canvas');t.width=cv.width;t.height=cv.height;
+    const tc=t.getContext('2d');tc.fillStyle='#fff';tc.fillRect(0,0,t.width,t.height);tc.drawImage(cv,0,0);
+    t.toBlob(async b=>{save(pdfBlob(new Uint8Array(await b.arrayBuffer()),t.width,t.height),'gpx-track.pdf')},'image/jpeg',.95);
+  }
 };
 $('rot').addEventListener('input',()=>{rotDeg=+$('rot').value;$('rotn').value=rotDeg;resetView();draw()});
 $('rotn').addEventListener('input',()=>{
@@ -330,16 +513,36 @@ vp.addEventListener('wheel',e=>{
   const z2=Math.min(30,Math.max(1,view.z*Math.exp(-e.deltaY*.0015))),f=1-z2/view.z;
   view.x+=cx*f;view.y+=cy*f;view.z=z2;applyView();
 },{passive:false});
-let drag=null;
-vp.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};vp.setPointerCapture(e.pointerId)});
-vp.addEventListener('pointermove',e=>{if(!drag)return;view.x+=e.clientX-drag.x;view.y+=e.clientY-drag.y;drag={x:e.clientX,y:e.clientY};applyView()});
-['pointerup','pointercancel'].forEach(t=>vp.addEventListener(t,()=>{drag=null}));
+const ptrs=new Map();let pinch=null;
+vp.addEventListener('pointerdown',e=>{ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});vp.setPointerCapture(e.pointerId);pinch=null});
+vp.addEventListener('pointermove',e=>{
+  const p=ptrs.get(e.pointerId);if(!p)return;
+  if(ptrs.size<2){view.x+=e.clientX-p.x;view.y+=e.clientY-p.y;p.x=e.clientX;p.y=e.clientY;applyView();return}
+  p.x=e.clientX;p.y=e.clientY;
+  const[a,b]=[...ptrs.values()],d=Math.hypot(a.x-b.x,a.y-b.y),mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+  if(pinch&&pinch.d>0){
+    const rc=cv.getBoundingClientRect(),z2=Math.min(30,Math.max(1,view.z*d/pinch.d)),f=1-z2/view.z;
+    view.x+=(pinch.mx-rc.left)*f+(mx-pinch.mx);view.y+=(pinch.my-rc.top)*f+(my-pinch.my);view.z=z2;applyView();
+  }
+  pinch={d,mx,my};
+});
+['pointerup','pointercancel'].forEach(t=>vp.addEventListener(t,e=>{ptrs.delete(e.pointerId);pinch=null}));
 vp.addEventListener('dblclick',resetView);
 $('rv').onclick=resetView;
 $('ss').addEventListener('change',()=>{startSel=$('ss').value;$('sc').style.display=startSel==='custom'?'':'none';draw()});
 $('sc').addEventListener('input',()=>{const m=$('sc').value.match(/-?\d+(\.\d+)?/g);customStart=m&&m.length>=2&&Math.abs(+m[0])<=90&&Math.abs(+m[1])<=180?[+m[0],+m[1]]:null;draw()});
 $('dd').addEventListener('input',draw);
 $('sm').addEventListener('input',draw);
+function importText(txt){
+  const{out,skip}=parseBulk(txt);
+  out.forEach(q=>points.push({...q,shape:$('ps').value,color:$('pc').value,size:+$('pz').value,snap:false}));
+  $('bmsg').textContent=out.length?'已匯入 '+out.length+' 筆'+(skip?'，略過 '+skip+' 行':''):'沒有可匯入的座標';
+  if(out.length){renderPoints();draw()}
+  return out.length;
+}
+$('bi').onclick=()=>{if(importText($('bulk').value))$('bulk').value=''};
+$('bf').onclick=()=>$('bcsv').click();
+$('bcsv').onchange=async e=>{const f=e.target.files[0];if(f)importText(await f.text());e.target.value=''};
 renderStartOpts();
 $('multi').addEventListener('input',renderFiles);
 draw();
